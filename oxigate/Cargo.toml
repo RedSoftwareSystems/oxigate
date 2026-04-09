@@ -1,0 +1,17 @@
+[package]
+name = "oxigate"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "OpenID Connect (OIDC) and OAuth2 client middleware for Axum web framework"
+documentation = "https://docs.rs/axum-oidc-client"
+homepage = "https://github.com/RedSoftwareSystems/axum-oidc-client"
+repository = "https://github.com/RedSoftwareSystems/axum-oidc-client"
+
+[dependencies]
+axum = { version = "0.8", features = ["form", "http1", "http2", "json", "macros", "matched-path", "multipart", "original-uri", "query", "tokio", "tower-log", "tracing", "ws"] }
+axum-oidc-client = { git = "https://github.com/RedSoftwareSystems/axum-oidc-client", branch = "9-callback-redirect", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+
+serde_yaml = "0.9"
+regex-automata = "0.4"
