@@ -9,7 +9,7 @@ use axum::{
     http::{HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
-use axum_oidc_client::auth_session::AuthSession;
+use axum_oidc_client::extractors::OptionalAuthSession;
 use reqwest::ClientBuilder;
 
 use crate::config::client::HttpClientConfig;
@@ -340,7 +340,7 @@ fn build_upstream_url(route: &ReverseProxyRoute, path: &str, query: Option<&str>
 /// optional [`AuthSession`] extractor when available.
 pub async fn proxy_handler(
     State(state): State<Arc<ProxyState>>,
-    auth_session: Option<AuthSession>,
+    OptionalAuthSession(auth_session): OptionalAuthSession,
     req: Request,
 ) -> Result<Response, ProxyError> {
     let method = req.method().clone();
