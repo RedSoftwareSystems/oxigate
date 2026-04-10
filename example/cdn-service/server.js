@@ -32,6 +32,17 @@ app.get('/static/', (_req, res) => {
 // ── Serve static files from ./public under /static/ ──────────────────────────
 app.use('/static', express.static(PUBLIC_DIR, { index: false }));
 
+
+// ── Protected pages (─ /protected/<page> → /protected/<page>.html) ────────────────────
+// The gateway forwards /protected/dashboard as-is; we append .html and serve
+// the corresponding file from the public/ directory.
+app.get('/protected/*', (req, res, next) => {
+  const htmlPath = join(PUBLIC_DIR, req.path + '.html');
+  res.sendFile(htmlPath, (err) => {
+    if (err) next(); // fall through to 404 if file not found
+  });
+});
+
 // ── 404 fallback ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
