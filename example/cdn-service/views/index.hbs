@@ -1,0 +1,44 @@
+<div class="hero">
+  <img src="/static/logo.svg" alt="Oxigate logo" class="hero-logo" />
+  <h1 class="hero-title">Welcome to Oxigate</h1>
+  <p class="hero-subtitle">
+    A lightweight, OIDC-aware reverse proxy and API gateway built on Axum.
+  </p>
+
+  {{#if loggedIn}}
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/protected/dashboard">Go to Dashboard</a>
+    <a class="btn btn-secondary" href="/protected/profile">Your Profile</a>
+  </div>
+  {{else}}
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/auth">Log in to continue</a>
+  </div>
+  <p class="hint">
+    After logging in you will have access to the protected pages and the
+    backend API via the gateway.
+  </p>
+  {{/if}}
+</div>
+
+<section class="card-grid">
+  <div class="card">
+    <h2>Health check</h2>
+    <p>Verify that the gateway and backend are running.</p>
+    <a class="btn btn-ghost" href="/health">GET /health</a>
+  </div>
+  <div class="card">
+    <h2>Static assets</h2>
+    <p>Assets are served directly through the gateway.</p>
+    <a class="btn btn-ghost" href="/static/logo.svg" target="_blank">logo.svg</a>
+    <a class="btn btn-ghost" href="/static/styles.css" target="_blank">styles.css</a>
+  </div>
+  {{#if loggedIn}}
+  <div class="card">
+    <h2>Backend API</h2>
+    <p>REST endpoints proxied by Oxigate with Bearer token injection.</p>
+    <a class="btn btn-ghost" href="/api/users" target="_blank">GET /api/users</a>
+    <a class="btn btn-ghost" href="/api/items" target="_blank">GET /api/items</a>
+  </div>
+  {{/if}}
+</section>

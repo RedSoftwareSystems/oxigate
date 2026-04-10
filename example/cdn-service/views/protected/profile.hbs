@@ -1,0 +1,27 @@
+<div class="page-header">
+  <h1>Profile</h1>
+  <p class="page-subtitle">Your account details.</p>
+</div>
+
+<div class="profile-card">
+  <div class="avatar">
+    {{#if user.name}}{{slice user.name 0 1}}{{else}}?{{/if}}
+  </div>
+  <div class="profile-info">
+    <dl class="definition-list">
+      <dt>Name</dt>    <dd>{{user.name}}</dd>
+      {{#if user.email}}
+      <dt>Email</dt>   <dd>{{user.email}}</dd>
+      {{/if}}
+      <dt>Subject</dt> <dd class="mono">{{user.subject}}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="card" style="margin-top:2rem;">
+  <h2>Actions</h2>
+  <div class="action-row">
+    <a class="btn btn-secondary" href="/protected/dashboard">Back to Dashboard</a>
+    <a class="btn btn-danger"    href="/auth/logout">Log out</a>
+  </div>
+</div>

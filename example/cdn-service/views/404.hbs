@@ -1,0 +1,11 @@
+<div class="error-page">
+  <div class="error-code">404</div>
+  <h1>Page not found</h1>
+  <p>The path <code>{{requestPath}}</code> does not exist on this server.</p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/">Go home</a>
+    {{#if loggedIn}}
+    <a class="btn btn-secondary" href="/protected/dashboard">Dashboard</a>
+    {{/if}}
+  </div>
+</div>

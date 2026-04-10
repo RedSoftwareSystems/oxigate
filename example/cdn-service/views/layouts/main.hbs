@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{title}} — Oxigate Example</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/">
+        <img src="/static/logo.svg" alt="Oxigate logo" class="brand-logo" />
+        Oxigate
+      </a>
+      <nav class="site-nav">
+        <a href="/">Home</a>
+        {{#if loggedIn}}
+          <a href="/protected/dashboard">Dashboard</a>
+          <a href="/protected/profile">Profile</a>
+          <a href="/api/users" target="_blank">API</a>
+        {{/if}}
+      </nav>
+      <div class="auth-actions">
+        {{#if loggedIn}}
+          <span class="user-greeting">Hello, {{user.name}}</span>
+          <a class="btn btn-secondary" href="/auth/logout">Log out</a>
+        {{else}}
+          <a class="btn btn-primary" href="/auth">Log in</a>
+        {{/if}}
+      </div>
+    </div>
+  </header>
+
+  <main class="page-content">
+    {{> flash}}
+    {{{body}}}
+  </main>
+
+  <footer class="site-footer">
+    <p>Oxigate Example &mdash; powered by <a href="https://github.com/RedSoftwareSystems/oxigate" target="_blank">Oxigate</a></p>
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

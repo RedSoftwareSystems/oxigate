@@ -1,0 +1,61 @@
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <p class="page-subtitle">Welcome back, <strong>{{user.name}}</strong>.</p>
+</div>
+
+<section class="card-grid">
+  <div class="card">
+    <h2>Users</h2>
+    <p>Fetch the list of users from the backend API.</p>
+    <button class="btn btn-primary" onclick="loadUsers()">Load users</button>
+    <ul id="users-list" class="data-list"></ul>
+  </div>
+
+  <div class="card">
+    <h2>Items</h2>
+    <p>Fetch the list of items from the backend API.</p>
+    <button class="btn btn-primary" onclick="loadItems()">Load items</button>
+    <ul id="items-list" class="data-list"></ul>
+  </div>
+
+  <div class="card">
+    <h2>Your session</h2>
+    <dl class="definition-list">
+      <dt>Name</dt>  <dd>{{user.name}}</dd>
+      {{#if user.email}}
+      <dt>Email</dt> <dd>{{user.email}}</dd>
+      {{/if}}
+      <dt>Subject</dt> <dd class="mono">{{user.subject}}</dd>
+    </dl>
+  </div>
+</section>
+
+<script>
+async function loadUsers() {
+  const list = document.getElementById('users-list');
+  list.innerHTML = '<li class="loading">Loading&hellip;</li>';
+  try {
+    const res  = await fetch('/api/users');
+    const data = await res.json();
+    list.innerHTML = data.map(u =>
+      `<li><strong>${u.name}</strong> &lt;${u.email}&gt; <span class="badge">${u.role}</span></li>`
+    ).join('');
+  } catch (err) {
+    list.innerHTML = `<li class="error">Error: ${err.message}</li>`;
+  }
+}
+
+async function loadItems() {
+  const list = document.getElementById('items-list');
+  list.innerHTML = '<li class="loading">Loading&hellip;</li>';
+  try {
+    const res  = await fetch('/api/items');
+    const data = await res.json();
+    list.innerHTML = data.map(i =>
+      `<li><strong>${i.name}</strong> — $${i.price} <span class="badge">${i.stock} in stock</span></li>`
+    ).join('');
+  } catch (err) {
+    list.innerHTML = `<li class="error">Error: ${err.message}</li>`;
+  }
+}
+</script>
