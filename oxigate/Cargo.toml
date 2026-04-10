@@ -2,11 +2,12 @@
 name = "oxigate"
 version = "0.1.0"
 edition = "2024"
+authors = ["Andrea Chiumenti <achiumenti@red.software.systems>"]
 license = "MIT"
-description = "OpenID Connect (OIDC) and OAuth2 client middleware for Axum web framework"
-documentation = "https://docs.rs/axum-oidc-client"
-homepage = "https://github.com/RedSoftwareSystems/axum-oidc-client"
-repository = "https://github.com/RedSoftwareSystems/axum-oidc-client"
+description = "Core library for the Oxigate OIDC-aware reverse proxy / API gateway built on Axum"
+documentation = "https://docs.rs/oxigate"
+homepage = "https://github.com/RedSoftwareSystems/oxigate"
+repository = "https://github.com/RedSoftwareSystems/oxigate"
 
 [dependencies]
 axum = { version = "0.8", features = ["form", "http1", "http2", "json", "macros", "matched-path", "multipart", "original-uri", "query", "tokio", "tower-log", "tracing", "ws"] }

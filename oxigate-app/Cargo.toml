@@ -2,6 +2,15 @@
 name = "oxigate-app"
 version = "0.1.0"
 edition = "2024"
+authors = ["Andrea Chiumenti <achiumenti@red.software.systems>"]
+license = "MIT"
+description = "OIDC-aware reverse proxy / API gateway built on Axum"
+homepage = "https://github.com/RedSoftwareSystems/oxigate"
+repository = "https://github.com/RedSoftwareSystems/oxigate"
+
+[[bin]]
+name = "oxigate"
+path = "src/main.rs"
 
 [dependencies]
 oxigate = { path = "../oxigate" }

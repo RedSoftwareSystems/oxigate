@@ -32,6 +32,22 @@ struct Cli {
     /// Path to the gateway configuration file (YAML).
     #[arg(short, long, default_value = "/etc/oxigate/gateway.yaml")]
     config: std::path::PathBuf,
+
+    /// Write example configuration files to a directory and exit.
+    ///
+    /// If no path is given the current working directory is used.
+    /// Creates the following files:
+    ///   gateway.yaml  — main gateway configuration
+    ///   routes.yaml   — reverse proxy route definitions
+    ///   clients.yaml  — named HTTP client registry
+    ///   auth.yaml     — OIDC / OAuth2 authentication layer (optional)
+    #[arg(
+        long,
+        value_name = "PATH",
+        num_args = 0..=1,
+        default_missing_value = ".",
+    )]
+    init: Option<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +127,15 @@ impl From<axum_oidc_client::errors::Error> for StartupError {
 async fn main() {
     let cli = Cli::parse();
 
+    // --init: write example config files and exit.
+    if let Some(dest) = cli.init {
+        if let Err(e) = write_example_configs(&dest) {
+            eprintln!("Failed to write example configs: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // Load gateway config first (needed for log level before tracing is init).
     let gateway_cfg = match GatewayConfig::from_file(&cli.config) {
         Ok(c) => c,
@@ -128,6 +153,274 @@ async fn main() {
         std::process::exit(1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// --init: example configuration scaffolding
+// ---------------------------------------------------------------------------
+
+/// Write a set of well-commented example YAML configuration files to `dest`.
+fn write_example_configs(dest: &std::path::Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(dest)?;
+
+    let files: &[(&str, &str)] = &[
+        ("gateway.yaml", EXAMPLE_GATEWAY),
+        ("routes.yaml", EXAMPLE_ROUTES),
+        ("clients.yaml", EXAMPLE_CLIENTS),
+        ("auth.yaml", EXAMPLE_AUTH),
+    ];
+
+    for (name, content) in files {
+        let path = dest.join(name);
+        if path.exists() {
+            eprintln!("Skipping {}: file already exists", path.display());
+            continue;
+        }
+        std::fs::write(&path, content)?;
+        println!("Created {}", path.display());
+    }
+
+    println!(
+        "\nExample configuration written to {}.\n\
+         Edit the files to match your environment, then run:\n\
+         \n  oxigate --config {}/gateway.yaml\n",
+        dest.display(),
+        dest.display(),
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Example file contents
+// ---------------------------------------------------------------------------
+
+const EXAMPLE_GATEWAY: &str = r#"# gateway.yaml — Oxigate main configuration
+#
+# Controls which TCP listeners to open, where to find the route / client /
+# auth config files, and the minimum log level.
+#
+# Listeners
+# ---------
+# At least one of `http` or `https` must be configured.
+# Both can be active at the same time (they run concurrently).
+
+# Plain HTTP listener (optional).
+http:
+  bind:
+    address: "0.0.0.0"
+    port: 8080
+
+# HTTPS listener with TLS, optional mTLS, and optional HTTP/2 (optional).
+https:
+  bind:
+    address: "0.0.0.0"
+    port: 8443
+
+  # Server certificate and private key — PEM or PKCS#12.
+  server_identity:
+    format: pem
+    cert: /etc/oxigate/tls/server.crt
+    key:  /etc/oxigate/tls/server.key
+
+  # Uncomment to enable PKCS#12 instead:
+  # server_identity:
+  #   format: pkcs12
+  #   path:     /etc/oxigate/tls/server.p12
+  #   password: "{{env:SERVER_P12_PASSWORD}}"
+
+  # Mutual TLS: uncomment to require client certificates.
+  # client_auth:
+  #   ca_cert: /etc/oxigate/tls/client-ca.pem
+  #   require: true   # false = optional client cert
+
+  # Advertise h2 + http/1.1 via ALPN (default: true).
+  http2: true
+
+# Paths to the individual YAML configuration files.
+config_files:
+  routes:  /etc/oxigate/routes.yaml
+  clients: /etc/oxigate/clients.yaml
+  # auth:  /etc/oxigate/auth.yaml   # uncomment to enable OIDC layer
+
+# Minimum log level: trace | debug | info | warn | error  (default: info)
+log_level: info
+"#;
+
+const EXAMPLE_ROUTES: &str = r#"# routes.yaml — Reverse proxy route definitions
+#
+# Each entry maps an inbound request (matched by path and, optionally, HTTP
+# method) to an upstream service URL.
+#
+# Fields
+# ------
+# name          (required) Unique identifier used in logs and metrics.
+# path          (required) How to match the request path — one of:
+#                 type: exact   value: /health
+#                 type: prefix  value: /api/
+#                 type: regex   value: "^/v[0-9]+/.*"
+# upstream_url  (required) Base URL of the upstream service (no trailing slash).
+# methods       (optional) Restrict to specific HTTP methods; empty = all.
+# rewrite       (optional) How to build the upstream path:
+#                 pass_through  — forward unchanged (default)
+#                 strip_prefix  — remove the matched prefix
+#                 replace: /new-path
+# request_headers  (optional) Headers to add/strip before forwarding.
+# response_headers (optional) Headers to add/strip before returning.
+# client_name   (optional) Name of a client from clients.yaml; if omitted
+#               a plain default client is used.
+# enabled       (optional, default: true) Set false to disable without removing.
+
+- name: health-check
+  path:
+    type: exact
+    value: /health
+  upstream_url: "http://backend:8080"
+  enabled: true
+
+- name: api-backend
+  path:
+    type: prefix
+    value: /api/
+  upstream_url: "http://backend:8080"
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+  rewrite: strip_prefix
+  request_headers:
+    add:
+      Authorization:       "{{access_token}}"   # inject OAuth2 access token
+      X-Id-Token:          "{{id_token}}"        # inject OIDC ID token
+      X-Api-Key:           "{{env:API_KEY}}"     # inject env variable
+      X-Forwarded-Prefix:  /api
+    strip:
+      - Cookie
+  response_headers:
+    strip:
+      - X-Internal-Server
+  # client_name: secure-backend   # reference a named client from clients.yaml
+  enabled: true
+
+- name: static-assets
+  path:
+    type: prefix
+    value: /static/
+  upstream_url: "http://cdn-service:9000"
+  rewrite: pass_through
+  enabled: true
+"#;
+
+const EXAMPLE_CLIENTS: &str = r#"# clients.yaml — Named HTTP client registry
+#
+# Defines named reqwest clients that routes can reference via `client_name`.
+# Each client has its own connection pool, TLS settings, and optional timeout.
+#
+# Fields
+# ------
+# name        (required) Unique identifier referenced by routes.
+# timeout_ms  (optional) Request timeout in milliseconds; omit for no timeout.
+# tls         (optional) TLS settings for the upstream connection:
+#   ca_cert             Path to a PEM CA certificate to verify the upstream.
+#   accept_invalid_certs  true/false — disable TLS verification (dev only!).
+#   client_identity     Client certificate for mutual TLS (mTLS):
+#     type: pem
+#       cert  Path to PEM client certificate.
+#       key   Path to PEM unencrypted private key.
+#     type: pkcs12
+#       path      Path to .p12 / .pfx archive.
+#       password  Optional password; supports {{env:VAR}} interpolation.
+
+clients:
+  # Plain default client — no TLS overrides, no timeout.
+  - name: default-backend
+
+  # Client with a custom CA and a 5-second timeout.
+  - name: secure-backend
+    timeout_ms: 5000
+    tls:
+      ca_cert: /etc/oxigate/tls/upstream-ca.pem
+
+  # Client with mutual TLS using PEM files.
+  - name: mtls-pem-backend
+    timeout_ms: 10000
+    tls:
+      ca_cert: /etc/oxigate/tls/upstream-ca.pem
+      client_identity:
+        type: pem
+        cert: /etc/oxigate/tls/client.crt
+        key:  /etc/oxigate/tls/client.key
+
+  # Client with mutual TLS using a PKCS#12 archive.
+  # - name: mtls-pkcs12-backend
+  #   tls:
+  #     ca_cert: /etc/oxigate/tls/upstream-ca.pem
+  #     client_identity:
+  #       type: pkcs12
+  #       path:     /etc/oxigate/tls/client.p12
+  #       password: "{{env:P12_PASSWORD}}"
+"#;
+
+const EXAMPLE_AUTH: &str = r#"# auth.yaml — OIDC / OAuth2 authentication layer (optional)
+#
+# When this file is referenced in gateway.yaml under config_files.auth,
+# the AuthenticationLayer from axum-oidc-client is added to the server.
+# Every incoming request must have a valid session cookie or it is
+# redirected to the provider's authorization endpoint.
+#
+# Endpoint resolution
+# -------------------
+# Option A — OIDC auto-discovery (recommended):
+#   Set `issuer_url`; endpoints are fetched from
+#   <issuer_url>/.well-known/openid-configuration automatically.
+#   Any field under `endpoints` overrides the discovered value.
+#
+# Option B — manual endpoints:
+#   Leave `issuer_url` unset and fill in all `endpoints.*` fields.
+
+# OIDC issuer URL for auto-discovery (option A).
+issuer_url: "https://accounts.google.com"
+
+# Manual endpoint overrides (option B or partial overrides of discovered values).
+# endpoints:
+#   authorization: "https://provider.example.com/oauth2/authorize"
+#   token:         "https://provider.example.com/oauth2/token"
+#   end_session:   "https://provider.example.com/oauth2/logout"
+
+# OAuth2 / OIDC client credentials.
+client:
+  id:           "your-client-id"
+  secret:       "{{env:OIDC_CLIENT_SECRET}}"   # never hard-code secrets
+  redirect_uri: "https://gateway.example.com/auth/callback"
+
+# Session cookie encryption key — must be at least 32 characters.
+# Generate with: openssl rand -base64 48
+private_cookie_key: "{{env:COOKIE_ENCRYPTION_KEY}}"
+
+# Session and token lifetime.
+session:
+  max_age_minutes:      30    # session duration
+  token_max_age_seconds: 300  # force refresh after 5 minutes (optional)
+
+# OAuth2 scopes to request (default: openid, email, profile).
+scopes:
+  - openid
+  - email
+  - profile
+
+# PKCE code challenge method: s256 (recommended) or plain.
+code_challenge_method: s256
+
+# Authentication route configuration.
+routes:
+  base_path: /auth                    # routes: GET /auth, /auth/callback, /auth/logout
+  post_logout_redirect_uri: /         # where to send users after logout
+  token_request_redirect_uri: true    # include redirect_uri in token request (RFC 6749)
+
+# TLS for the HTTP client that talks to the OIDC provider (optional).
+# provider_tls:
+#   custom_ca_cert: /etc/oxigate/tls/provider-ca.pem
+"#;
 
 // ---------------------------------------------------------------------------
 // Run
