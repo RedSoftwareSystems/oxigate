@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use reqwest::{Client, ClientBuilder, Identity};
 use serde::{Deserialize, Serialize};
 
-use crate::config::route::{HeaderValue as RouteHeaderValue, ResolveContext};
+use crate::config::interpolation::interpolate;
 
 /// Client identity (certificate + private key) used for mutual TLS (mTLS).
 ///
@@ -231,7 +231,7 @@ pub(crate) fn build_client_from_config(
         }
 
         if let Some(cert_path) = &tls.ca_cert {
-            let pem = std::fs::read(cert_path)
+            let pem = std::fs::read(interpolate(cert_path))
                 .map_err(|e| ClientRegistryError::TlsCertReadError(name.clone(), e))?;
             let cert = reqwest::Certificate::from_pem(&pem)
                 .map_err(|e| ClientRegistryError::ClientBuildError(name.clone(), e))?;
@@ -252,9 +252,9 @@ pub(crate) fn build_client_from_config(
 fn load_identity(name: &str, identity: &ClientIdentity) -> Result<Identity, ClientRegistryError> {
     match identity {
         ClientIdentity::Pem { cert, key } => {
-            let cert_pem = std::fs::read(cert)
+            let cert_pem = std::fs::read(interpolate(cert))
                 .map_err(|e| ClientRegistryError::TlsCertReadError(name.to_string(), e))?;
-            let key_pem = std::fs::read(key)
+            let key_pem = std::fs::read(interpolate(key))
                 .map_err(|e| ClientRegistryError::TlsCertReadError(name.to_string(), e))?;
             let mut combined = cert_pem;
             combined.extend_from_slice(&key_pem);
@@ -262,16 +262,11 @@ fn load_identity(name: &str, identity: &ClientIdentity) -> Result<Identity, Clie
                 .map_err(|e| ClientRegistryError::ClientBuildError(name.to_string(), e))
         }
         ClientIdentity::Pkcs12 { path, password } => {
-            let der = std::fs::read(path)
+            let der = std::fs::read(interpolate(path))
                 .map_err(|e| ClientRegistryError::TlsCertReadError(name.to_string(), e))?;
             let resolved_password = match password {
                 None => String::new(),
-                Some(raw) => {
-                    let hv: RouteHeaderValue = serde_yaml::from_str(&format!("\"{raw}\""))
-                        .unwrap_or(RouteHeaderValue::Literal(raw.clone()));
-                    let ctx = ResolveContext::new("", "");
-                    hv.resolve(&ctx)
-                }
+                Some(raw) => interpolate(raw),
             };
             Identity::from_pkcs12_der(&der, &resolved_password)
                 .map_err(|e| ClientRegistryError::ClientBuildError(name.to_string(), e))

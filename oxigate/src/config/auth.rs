@@ -383,37 +383,39 @@ impl AuthConfig {
     /// - The discovery request fails (network error, non-200 status, invalid JSON).
     /// - The private cookie key or any other field is invalid.
     pub async fn build(&self) -> Result<OAuthConfiguration, Error> {
+        use crate::config::interpolation::{interpolate, interpolate_opt};
+
         let mut builder = OAuthConfigurationBuilder::default();
 
         // ── Provider TLS ─────────────────────────────────────────────────────
-        if let Some(ca) = &self.provider_tls.custom_ca_cert {
-            builder = builder.with_custom_ca_cert(ca);
+        if let Some(ca) = interpolate_opt(self.provider_tls.custom_ca_cert.as_deref()) {
+            builder = builder.with_custom_ca_cert(&ca);
         }
 
         // ── OIDC discovery ───────────────────────────────────────────────────
-        if let Some(issuer) = &self.issuer_url {
-            builder = builder.with_issuer(issuer).await?;
+        if let Some(issuer) = interpolate_opt(self.issuer_url.as_deref()) {
+            builder = builder.with_issuer(&issuer).await?;
         }
 
         // ── Manual endpoint overrides (always win over discovery) ────────────
-        if let Some(auth) = &self.endpoints.authorization {
-            builder = builder.with_authorization_endpoint(auth);
+        if let Some(auth) = interpolate_opt(self.endpoints.authorization.as_deref()) {
+            builder = builder.with_authorization_endpoint(&auth);
         }
-        if let Some(token) = &self.endpoints.token {
-            builder = builder.with_token_endpoint(token);
+        if let Some(token) = interpolate_opt(self.endpoints.token.as_deref()) {
+            builder = builder.with_token_endpoint(&token);
         }
-        if let Some(end_session) = &self.endpoints.end_session {
-            builder = builder.with_end_session_endpoint(end_session);
+        if let Some(end_session) = interpolate_opt(self.endpoints.end_session.as_deref()) {
+            builder = builder.with_end_session_endpoint(&end_session);
         }
 
         // ── Client credentials ───────────────────────────────────────────────
         builder = builder
-            .with_client_id(&self.client.id)
-            .with_client_secret(&self.client.secret)
-            .with_redirect_uri(&self.client.redirect_uri);
+            .with_client_id(&interpolate(&self.client.id))
+            .with_client_secret(&interpolate(&self.client.secret))
+            .with_redirect_uri(&interpolate(&self.client.redirect_uri));
 
         // ── Cookie key ───────────────────────────────────────────────────────
-        builder = builder.with_private_cookie_key(&self.private_cookie_key);
+        builder = builder.with_private_cookie_key(&interpolate(&self.private_cookie_key));
 
         // ── Session / token lifetime ─────────────────────────────────────────
         builder = builder.with_session_max_age(self.session.max_age_minutes);
@@ -423,7 +425,8 @@ impl AuthConfig {
 
         // ── Scopes ───────────────────────────────────────────────────────────
         if !self.scopes.is_empty() {
-            let scope_refs: Vec<&str> = self.scopes.iter().map(String::as_str).collect();
+            let interpolated: Vec<String> = self.scopes.iter().map(|s| interpolate(s)).collect();
+            let scope_refs: Vec<&str> = interpolated.iter().map(String::as_str).collect();
             builder = builder.with_scopes(scope_refs);
         }
 
@@ -432,8 +435,8 @@ impl AuthConfig {
 
         // ── Route configuration ──────────────────────────────────────────────
         builder = builder
-            .with_base_path(&self.routes.base_path)
-            .with_post_logout_redirect_uri(&self.routes.post_logout_redirect_uri)
+            .with_base_path(interpolate(&self.routes.base_path))
+            .with_post_logout_redirect_uri(&interpolate(&self.routes.post_logout_redirect_uri))
             .with_token_request_redirect_uri(self.routes.token_request_redirect_uri);
 
         builder.build()

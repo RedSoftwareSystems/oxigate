@@ -359,6 +359,56 @@ fn default_enabled() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Interpolation
+// ---------------------------------------------------------------------------
+
+impl ReverseProxyRoute {
+    /// Return a clone of this route with all string fields resolved through
+    /// `{{env:VAR}}` interpolation.  Call this at startup before inserting
+    /// routes into [`crate::handler::proxy_handler::ProxyState`].
+    pub fn interpolated(&self) -> Self {
+        use crate::config::interpolation::interpolate;
+
+        fn interp_header_value(hv: &HeaderValue) -> HeaderValue {
+            match hv {
+                HeaderValue::Literal(s) => HeaderValue::Literal(interpolate(s)),
+                HeaderValue::Variable(_) => hv.clone(),
+            }
+        }
+
+        fn interp_headers_config(hc: &HeadersConfig) -> HeadersConfig {
+            HeadersConfig {
+                add: hc
+                    .add
+                    .iter()
+                    .map(|(k, v)| (interpolate(k), interp_header_value(v)))
+                    .collect(),
+                strip: hc.strip.iter().map(|s| interpolate(s)).collect(),
+            }
+        }
+
+        Self {
+            name: self.name.clone(),
+            path: match &self.path {
+                PathMatcher::Exact(s) => PathMatcher::Exact(interpolate(s)),
+                PathMatcher::Prefix(s) => PathMatcher::Prefix(interpolate(s)),
+                PathMatcher::Regex(s) => PathMatcher::Regex(interpolate(s)),
+            },
+            upstream_url: interpolate(&self.upstream_url),
+            methods: self.methods.clone(),
+            rewrite: match &self.rewrite {
+                RewriteRule::Replace(s) => RewriteRule::Replace(interpolate(s)),
+                other => other.clone(),
+            },
+            request_headers: interp_headers_config(&self.request_headers),
+            response_headers: interp_headers_config(&self.response_headers),
+            client_name: self.client_name.as_deref().map(interpolate),
+            enabled: self.enabled,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

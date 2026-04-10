@@ -1,0 +1,60 @@
+# docker-compose.yml — Oxigate example environment
+#
+# Services:
+#   backend     — Express API server (health + REST API endpoints)
+#   cdn-service — Express static asset server
+#   gateway     — Oxigate reverse proxy (HTTP :8080 + HTTPS :8443)
+#
+# Quick start:
+#   1. Generate TLS certificates:  ./gen-certs.sh
+#   2. Build the oxigate binary:   cd .. && cargo build --release -p oxigate-app
+#   3. Start services:             docker compose up --build
+#
+# Test:
+#   curl http://localhost:8080/health
+#   curl --cacert certs/ca.crt https://localhost:8443/health
+#   curl http://localhost:8080/api/users
+#   curl http://localhost:8080/static/logo.svg
+
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      NODE_ENV: production
+    networks:
+      - oxigate-net
+    # Not exposed to host — accessed only through the gateway
+
+  cdn-service:
+    build:
+      context: ./cdn-service
+    environment:
+      NODE_ENV: production
+    networks:
+      - oxigate-net
+    # Not exposed to host — accessed only through the gateway
+
+  gateway:
+    build:
+      context: ../
+      dockerfile: example/gateway/Dockerfile
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    environment:
+      API_KEY: "example-api-key-change-in-production"
+      RUST_LOG: "info"
+    volumes:
+      - ./gateway:/etc/oxigate:ro
+      - ./certs/server.crt:/etc/oxigate/tls/server.crt:ro
+      - ./certs/server.key:/etc/oxigate/tls/server.key:ro
+    depends_on:
+      - backend
+      - cdn-service
+    networks:
+      - oxigate-net
+
+networks:
+  oxigate-net:
+    driver: bridge
