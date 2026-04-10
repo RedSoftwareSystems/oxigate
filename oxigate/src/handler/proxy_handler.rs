@@ -2,17 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::Client;
+
 use axum::{
     extract::{Request, State},
     http::{HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use axum_oidc_client::auth_session::AuthSession;
-use reqwest::{Client, ClientBuilder, Identity};
+use reqwest::ClientBuilder;
 
+use crate::config::client::HttpClientConfig;
 use crate::config::route::{
-    ClientIdentity, HeaderValue as RouteHeaderValue, HttpMethod, PathMatcher, ResolveContext,
-    ReverseProxyRoute, RewriteRule, TlsConfig,
+    HttpMethod, PathMatcher, ResolveContext, ReverseProxyRoute, RewriteRule,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,92 +35,11 @@ pub struct RouteEntry {
 }
 
 impl RouteEntry {
-    /// Build a client from an optional [`TlsConfig`].
-    ///
-    /// - Loads a PEM CA certificate from disk when `tls.ca_cert` is set.
-    /// - Loads a PEM client certificate + key for mTLS when `tls.client_identity` is set.
-    /// - Disables certificate validation when `tls.accept_invalid_certs` is `true`.
-    /// - Falls back to a plain default client when `tls` is `None`.
-    fn build_client(name: &str, tls: Option<&TlsConfig>) -> Result<Client, ProxyError> {
-        let mut builder = ClientBuilder::new();
-
-        if let Some(tls) = tls {
-            if tls.accept_invalid_certs {
-                builder = builder.danger_accept_invalid_certs(true);
-            }
-
-            if let Some(cert_path) = &tls.ca_cert {
-                let pem = std::fs::read(cert_path)
-                    .map_err(|e| ProxyError::TlsCertReadError(name.to_string(), e))?;
-
-                let cert = reqwest::Certificate::from_pem(&pem)
-                    .map_err(|e| ProxyError::ClientBuildError(name.to_string(), e))?;
-
-                builder = builder.add_root_certificate(cert);
-            }
-
-            if let Some(identity) = &tls.client_identity {
-                builder = builder.identity(Self::load_identity(name, identity)?);
-            }
-        }
-
-        builder
-            .build()
-            .map_err(|e| ProxyError::ClientBuildError(name.to_string(), e))
-    }
-
-    /// Load a client identity as a [`reqwest::Identity`], dispatching on the
-    /// [`ClientIdentity`] variant:
-    ///
-    /// - `Pem`    — concatenates cert + key PEM files and parses via
-    ///   [`Identity::from_pem`].
-    /// - `Pkcs12` — reads the archive and parses via [`Identity::from_pkcs12_der`].
-    ///   The optional password field supports `{{env:VAR}}` interpolation
-    ///   (resolved against the process environment at client-build time,
-    ///   before any request context is available).
-    fn load_identity(name: &str, identity: &ClientIdentity) -> Result<Identity, ProxyError> {
-        match identity {
-            ClientIdentity::Pem { cert, key } => {
-                let cert_pem = std::fs::read(cert)
-                    .map_err(|e| ProxyError::TlsCertReadError(name.to_string(), e))?;
-                let key_pem = std::fs::read(key)
-                    .map_err(|e| ProxyError::TlsCertReadError(name.to_string(), e))?;
-
-                // reqwest::Identity::from_pem expects cert + key in one PEM blob.
-                let mut combined = cert_pem;
-                combined.extend_from_slice(&key_pem);
-
-                Identity::from_pem(&combined)
-                    .map_err(|e| ProxyError::ClientBuildError(name.to_string(), e))
-            }
-
-            ClientIdentity::Pkcs12 { path, password } => {
-                let der = std::fs::read(path)
-                    .map_err(|e| ProxyError::TlsCertReadError(name.to_string(), e))?;
-
-                // Resolve the password: support {{env:VAR}} placeholders by
-                // deserialising the raw string as a HeaderValue and resolving it
-                // against an empty session context (only env vars are meaningful
-                // at build time, before any request is in flight).
-                let resolved_password = match password {
-                    None => String::new(),
-                    Some(raw) => {
-                        let hv: RouteHeaderValue = serde_yaml::from_str(&format!("\"{raw}\""))
-                            .unwrap_or(RouteHeaderValue::Literal(raw.clone()));
-                        let ctx = ResolveContext::new("", "");
-                        hv.resolve(&ctx)
-                    }
-                };
-
-                Identity::from_pkcs12_der(&der, &resolved_password)
-                    .map_err(|e| ProxyError::ClientBuildError(name.to_string(), e))
-            }
-        }
-    }
-
-    /// Build a [`RouteEntry`], applying any TLS configuration declared on the route.
+    /// Build a [`RouteEntry`] with a plain default HTTP client.
     pub fn new(route: ReverseProxyRoute) -> Result<Self, ProxyError> {
-        let client = Self::build_client(&route.name, route.tls.as_ref())?;
+        let client = ClientBuilder::new()
+            .build()
+            .map_err(|e| ProxyError::ClientBuildError(route.name.clone(), e))?;
         Ok(Self { client, route })
     }
 
@@ -156,6 +77,10 @@ pub struct ProxyState {
     /// Per-route entries, each with its own HTTP client. The first matching
     /// enabled entry wins.
     pub entries: Vec<RouteEntry>,
+    /// Named HTTP clients from the [`crate::config::client::HttpClientRegistry`].
+    /// Routes may reference a client by name via `client_name` to use its
+    /// configured TLS settings and `timeout_ms`.
+    pub clients: HashMap<String, (HttpClientConfig, Client)>,
     /// Optional pre-collected environment snapshot used for `{{env:…}}`
     /// interpolation. When `None` the handler falls back to `std::env::var`.
     pub env: Option<Arc<HashMap<String, String>>>,
@@ -173,25 +98,57 @@ impl ProxyState {
         Ok(())
     }
 
-    /// Create a new [`ProxyState`] from a list of routes.
+    /// Validate that every `client_name` referenced by a route exists in the
+    /// provided clients map.
+    fn check_client_names(
+        entries: &[RouteEntry],
+        clients: &HashMap<String, (HttpClientConfig, Client)>,
+    ) -> Result<(), ProxyError> {
+        for entry in entries {
+            if let Some(ref name) = entry.route.client_name
+                && !clients.contains_key(name.as_str())
+            {
+                return Err(ProxyError::UnknownClientName(name.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Create a new [`ProxyState`] from a list of routes and a named-client map.
     ///
     /// Each route gets its own [`Client`] built from the route's [`TlsConfig`]
-    /// (if any). Returns `Err` if any two routes share the same name or if a
-    /// TLS certificate cannot be read or parsed.
-    pub fn new(routes: Vec<ReverseProxyRoute>) -> Result<Self, ProxyError> {
+    /// (if any). Returns `Err` if:
+    /// - Any two routes share the same name.
+    /// - A TLS certificate cannot be read or parsed.
+    /// - A route references a `client_name` not present in `clients`.
+    pub fn new(
+        routes: Vec<ReverseProxyRoute>,
+        clients: HashMap<String, (HttpClientConfig, Client)>,
+    ) -> Result<Self, ProxyError> {
         Self::check_unique_names(&routes)?;
         let entries = routes
             .into_iter()
             .map(RouteEntry::new)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { entries, env: None })
+        Self::check_client_names(&entries, &clients)?;
+        Ok(Self {
+            entries,
+            clients,
+            env: None,
+        })
     }
 
-    /// Create a new [`ProxyState`] from pre-built [`RouteEntry`] values.
+    /// Create a new [`ProxyState`] from pre-built [`RouteEntry`] values and a
+    /// named-client map.
     ///
     /// Use this when you need per-route custom clients (e.g. custom CA certs).
-    /// Returns `Err` if any two entries share the same route name.
-    pub fn from_entries(entries: Vec<RouteEntry>) -> Result<Self, ProxyError> {
+    /// Returns `Err` if:
+    /// - Any two entries share the same route name.
+    /// - A route references a `client_name` not present in `clients`.
+    pub fn from_entries(
+        entries: Vec<RouteEntry>,
+        clients: HashMap<String, (HttpClientConfig, Client)>,
+    ) -> Result<Self, ProxyError> {
         let routes: Vec<&ReverseProxyRoute> = entries.iter().map(|e| &e.route).collect();
         let mut seen = HashMap::new();
         for route in routes {
@@ -199,7 +156,12 @@ impl ProxyState {
                 return Err(ProxyError::DuplicateRouteName(route.name.clone()));
             }
         }
-        Ok(Self { entries, env: None })
+        Self::check_client_names(&entries, &clients)?;
+        Ok(Self {
+            entries,
+            clients,
+            env: None,
+        })
     }
 
     /// Attach a pre-collected environment snapshot for `{{env:…}}` resolution.
@@ -226,8 +188,8 @@ pub enum ProxyError {
     DuplicateRouteName(String),
     /// Failed to build the HTTP client for a route.
     ClientBuildError(String, reqwest::Error),
-    /// Failed to read the TLS CA certificate file for a route.
-    TlsCertReadError(String, std::io::Error),
+    /// A route referenced a client name not found in the registry.
+    UnknownClientName(String),
 }
 
 impl IntoResponse for ProxyError {
@@ -254,9 +216,9 @@ impl IntoResponse for ProxyError {
                 format!("Failed to build client for route \"{name}\": {e}"),
             )
                 .into_response(),
-            ProxyError::TlsCertReadError(name, e) => (
+            ProxyError::UnknownClientName(name) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read TLS certificate for route \"{name}\": {e}"),
+                format!("Unknown client name referenced by route: \"{name}\""),
             )
                 .into_response(),
         }
@@ -389,7 +351,17 @@ pub async fn proxy_handler(
     // --- 1. Route selection -------------------------------------------------
     let entry = select_entry(&state.entries, &method, path).ok_or(ProxyError::NoRouteMatched)?;
     let route = &entry.route;
-    let client = &entry.client;
+
+    // Resolve client and timeout_ms:
+    // - Named registry client (from client_name) provides both client and timeout_ms
+    // - Otherwise use the per-route default client with no timeout
+    let (client, timeout_ms) = entry
+        .route
+        .client_name
+        .as_deref()
+        .and_then(|n| state.clients.get(n))
+        .map(|(cfg, c)| (c, cfg.timeout_ms))
+        .unwrap_or((&entry.client, None));
 
     // --- 2. Path rewriting --------------------------------------------------
     let upstream_path = rewrite_path(route, path);
@@ -412,8 +384,8 @@ pub async fn proxy_handler(
 
     let mut upstream_req = client.request(reqwest_method, &upstream_url);
 
-    // Apply timeout if configured.
-    if let Some(ms) = route.timeout_ms {
+    // Apply timeout from the resolved client configuration.
+    if let Some(ms) = timeout_ms {
         upstream_req = upstream_req.timeout(Duration::from_millis(ms));
     }
 
@@ -523,8 +495,7 @@ mod tests {
             rewrite: RewriteRule::PassThrough,
             request_headers: Default::default(),
             response_headers: Default::default(),
-            timeout_ms: None,
-            tls: None,
+            client_name: None,
             enabled: true,
         }
     }
@@ -532,7 +503,7 @@ mod tests {
     #[test]
     fn unique_names_accepted() {
         let routes = vec![make_route("alpha"), make_route("beta"), make_route("gamma")];
-        assert!(ProxyState::new(routes).is_ok());
+        assert!(ProxyState::new(routes, HashMap::new()).is_ok());
     }
 
     #[test]
@@ -542,22 +513,9 @@ mod tests {
     }
 
     #[test]
-    fn route_with_missing_cert_errors() {
-        use crate::config::route::TlsConfig;
-        let mut route = make_route("bad-cert");
-        route.tls = Some(TlsConfig {
-            ca_cert: Some("/nonexistent/path/ca.pem".to_string()),
-            client_identity: None,
-            accept_invalid_certs: false,
-        });
-        let err = RouteEntry::new(route).unwrap_err();
-        assert!(matches!(err, ProxyError::TlsCertReadError(n, _) if n == "bad-cert"));
-    }
-
-    #[test]
     fn duplicate_name_rejected() {
         let routes = vec![make_route("alpha"), make_route("beta"), make_route("alpha")];
-        let err = ProxyState::new(routes).unwrap_err();
+        let err = ProxyState::new(routes, HashMap::new()).unwrap_err();
         assert!(matches!(err, ProxyError::DuplicateRouteName(n) if n == "alpha"));
     }
 
@@ -567,7 +525,7 @@ mod tests {
             RouteEntry::new(make_route("foo")).unwrap(),
             RouteEntry::new(make_route("foo")).unwrap(),
         ];
-        let err = ProxyState::from_entries(entries).unwrap_err();
+        let err = ProxyState::from_entries(entries, HashMap::new()).unwrap_err();
         assert!(matches!(err, ProxyError::DuplicateRouteName(n) if n == "foo"));
     }
 
@@ -581,14 +539,14 @@ mod tests {
             make_route("beta"),
             make_route("gamma"),
         ];
-        let err = ProxyState::new(routes).unwrap_err();
+        let err = ProxyState::new(routes, HashMap::new()).unwrap_err();
         assert!(matches!(err, ProxyError::DuplicateRouteName(n) if n == "beta"));
     }
 
     #[test]
     fn each_entry_has_its_own_client() {
         let routes = vec![make_route("svc-a"), make_route("svc-b")];
-        let state = ProxyState::new(routes).unwrap();
+        let state = ProxyState::new(routes, HashMap::new()).unwrap();
         // Each entry must hold a client; verify by pointer inequality is not
         // possible for reqwest::Client, but we can at least assert one per entry.
         assert_eq!(state.entries.len(), 2);
@@ -600,7 +558,40 @@ mod tests {
     fn custom_entry_accepted() {
         let route = make_route("custom");
         let entry = RouteEntry::with_builder(route, ClientBuilder::new()).unwrap();
-        let state = ProxyState::from_entries(vec![entry]).unwrap();
+        let state = ProxyState::from_entries(vec![entry], HashMap::new()).unwrap();
         assert_eq!(state.entries[0].route.name, "custom");
+    }
+
+    #[test]
+    fn unknown_client_name_rejected() {
+        let mut route = make_route("needs-named-client");
+        route.client_name = Some("nonexistent-client".to_string());
+        let err = ProxyState::new(vec![route], HashMap::new()).unwrap_err();
+        assert!(
+            matches!(err, ProxyError::UnknownClientName(n) if n == "nonexistent-client"),
+            "expected UnknownClientName error"
+        );
+    }
+
+    #[test]
+    fn known_client_name_accepted() {
+        use crate::config::client::HttpClientConfig;
+        let mut route = make_route("uses-named-client");
+        route.client_name = Some("my-client".to_string());
+        let named_client = ClientBuilder::new().build().unwrap();
+        let clients = HashMap::from([(
+            "my-client".to_string(),
+            (
+                HttpClientConfig {
+                    name: "my-client".to_string(),
+                    timeout_ms: None,
+                    tls: None,
+                },
+                named_client,
+            ),
+        )]);
+        let state = ProxyState::new(vec![route], clients).unwrap();
+        assert_eq!(state.entries[0].route.name, "uses-named-client");
+        assert!(state.clients.contains_key("my-client"));
     }
 }
