@@ -1,5 +1,5 @@
 # ── Stage 1: build the oxigate binary ────────────────────────────────────────
-FROM rust:1.87-slim-bookworm AS builder
+FROM rust:1.94-slim-bookworm AS builder
 
 # Install build dependencies (pkg-config + OpenSSL dev headers)
 RUN apt-get update && apt-get install -y \
@@ -15,7 +15,7 @@ COPY . .
 RUN cargo build --release -p oxigate-app
 
 # ── Stage 2: minimal runtime image ───────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:12-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \

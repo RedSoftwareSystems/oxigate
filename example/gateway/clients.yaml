@@ -1,6 +1,6 @@
 # clients.yaml — Named HTTP client registry
 #
-# Defines named reqwest clients that routes can reference via `client_name`.
+# Defines named reqwest clients that routes can reference via client_name.
 # Each client has its own connection pool, TLS settings, and optional timeout.
 #
 # Fields
@@ -8,9 +8,9 @@
 # name        (required) Unique identifier referenced by routes.
 # timeout_ms  (optional) Request timeout in milliseconds; omit for no timeout.
 # tls         (optional) TLS settings for the upstream connection:
-#   ca_cert             Path to a PEM CA certificate to verify the upstream.
+#   ca_cert               Path to a PEM CA certificate to verify the upstream.
 #   accept_invalid_certs  true/false — disable TLS verification (dev only!).
-#   client_identity     Client certificate for mutual TLS (mTLS):
+#   client_identity       Client certificate for mutual TLS (mTLS):
 #     type: pem
 #       cert  Path to PEM client certificate.
 #       key   Path to PEM unencrypted private key.
@@ -20,29 +20,34 @@
 
 clients:
   # Plain default client — no TLS overrides, no timeout.
+  # Used by all routes that do not specify a client_name.
   - name: default-backend
 
-  # Client with a custom CA and a 5-second timeout.
-  - name: secure-backend
-    timeout_ms: 5000
-    tls:
-      ca_cert: /etc/oxigate/tls/upstream-ca.pem
+  # The entries below are commented out because they reference TLS certificate
+  # files that must exist on the host before they can be activated.
+  # Uncomment and supply real cert paths when connecting to HTTPS upstreams.
 
-  # Client with mutual TLS using PEM files.
-  - name: mtls-pem-backend
-    timeout_ms: 10000
-    tls:
-      ca_cert: /etc/oxigate/tls/upstream-ca.pem
-      client_identity:
-        type: pem
-        cert: /etc/oxigate/tls/client.crt
-        key:  /etc/oxigate/tls/client.key
+  # Client with a custom CA certificate and a 5-second timeout.
+  # - name: secure-backend
+  #   timeout_ms: 5000
+  #   tls:
+  #     ca_cert: /etc/oxigate-tls/upstream-ca.pem
+
+  # Client with mutual TLS (mTLS) using separate PEM files.
+  # - name: mtls-pem-backend
+  #   timeout_ms: 10000
+  #   tls:
+  #     ca_cert: /etc/oxigate-tls/upstream-ca.pem
+  #     client_identity:
+  #       type: pem
+  #       cert: /etc/oxigate-tls/client.crt
+  #       key:  /etc/oxigate-tls/client.key
 
   # Client with mutual TLS using a PKCS#12 archive.
   # - name: mtls-pkcs12-backend
   #   tls:
-  #     ca_cert: /etc/oxigate/tls/upstream-ca.pem
+  #     ca_cert: /etc/oxigate-tls/upstream-ca.pem
   #     client_identity:
   #       type: pkcs12
-  #       path:     /etc/oxigate/tls/client.p12
+  #       path:     /etc/oxigate-tls/client.p12
   #       password: "{{env:P12_PASSWORD}}"

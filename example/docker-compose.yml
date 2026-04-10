@@ -1,20 +1,17 @@
 # docker-compose.yml — Oxigate example environment
 #
+# Prerequisites:
+#   1. Copy .env.example to .env and fill in your OAuth2 credentials.
+#   2. Run:  make up          (or make up-build for the first run)
+#
 # Services:
-#   backend     — Express API server (health + REST API endpoints)
-#   cdn-service — Express static asset server
-#   gateway     — Oxigate reverse proxy (HTTP :8080 + HTTPS :8443)
+#   backend     — Express REST API  (internal: http://backend:8080)
+#   cdn-service — Express + Handlebars CDN  (internal: http://cdn-service:9000)
+#   gateway     — Oxigate reverse proxy  (host: :8080 HTTP, :8443 HTTPS)
 #
-# Quick start:
-#   1. Generate TLS certificates:  ./gen-certs.sh
-#   2. Build the oxigate binary:   cd .. && cargo build --release -p oxigate-app
-#   3. Start services:             docker compose up --build
-#
-# Test:
-#   curl http://localhost:8080/health
-#   curl --cacert certs/ca.crt https://localhost:8443/health
-#   curl http://localhost:8080/api/users
-#   curl http://localhost:8080/static/logo.svg
+# The three required variables (OAUTH_ISSUER, OAUTH_CLIENT_ID,
+# OAUTH_CLIENT_SECRET) are loaded from .env and forwarded to the gateway
+# container so that auth.yaml interpolation can resolve them at startup.
 
 services:
   backend:
@@ -24,7 +21,7 @@ services:
       NODE_ENV: production
     networks:
       - oxigate-net
-    # Not exposed to host — accessed only through the gateway
+    # Not exposed to host — accessed only through the gateway.
 
   cdn-service:
     build:
@@ -33,7 +30,7 @@ services:
       NODE_ENV: production
     networks:
       - oxigate-net
-    # Not exposed to host — accessed only through the gateway
+    # Not exposed to host — accessed only through the gateway.
 
   gateway:
     build:
@@ -42,13 +39,20 @@ services:
     ports:
       - "8080:8080"
       - "8443:8443"
+    env_file:
+      - .env
     environment:
-      API_KEY: "example-api-key-change-in-production"
-      RUST_LOG: "info"
+      # Values from .env are automatically available; list them explicitly so
+      # that Docker Compose validates their presence at startup.
+      OAUTH_ISSUER:          ${OAUTH_ISSUER}
+      OAUTH_CLIENT_ID:       ${OAUTH_CLIENT_ID}
+      OAUTH_CLIENT_SECRET:   ${OAUTH_CLIENT_SECRET}
+      COOKIE_ENCRYPTION_KEY: ${COOKIE_ENCRYPTION_KEY}
+      API_KEY:               ${API_KEY}
+      RUST_LOG:              info
     volumes:
       - ./gateway:/etc/oxigate:ro
-      - ./certs/server.crt:/etc/oxigate/tls/server.crt:ro
-      - ./certs/server.key:/etc/oxigate/tls/server.key:ro
+      - ./certs:/etc/oxigate-tls:ro
     depends_on:
       - backend
       - cdn-service

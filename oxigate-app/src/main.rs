@@ -490,6 +490,7 @@ async fn run(gateway_cfg: GatewayConfig) -> Result<(), StartupError> {
     // the handler's extractor types (State<Arc<ProxyState>>) are resolved first.
     let app = {
         let router = Router::new()
+            .route("/", any(proxy_handler))
             .route("/{*path}", any(proxy_handler))
             .with_state(proxy_state.clone());
 

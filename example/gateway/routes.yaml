@@ -15,7 +15,7 @@
 # rewrite       (optional) How to build the upstream path:
 #                 pass_through  — forward unchanged (default)
 #                 strip_prefix  — remove the matched prefix
-#                 replace: /new-path
+#                 !replace /new-path
 # request_headers  (optional) Headers to add/strip before forwarding.
 # response_headers (optional) Headers to add/strip before returning.
 # client_name   (optional) Name of a client from clients.yaml; if omitted
@@ -31,8 +31,15 @@
   upstream_url: "http://cdn-service:9000"
   methods:
     - GET
-  rewrite:
-    replace: /index.html
+  request_headers:
+    add:
+      Authorization: "Bearer {{access_token}}"
+      X-Id-Token:    "{{id_token}}"
+    strip:
+      - Cookie
+  response_headers:
+    strip:
+      - X-Internal-Server
   enabled: true
 
 # \u2500\u2500 Protected pages \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -48,6 +55,15 @@
   methods:
     - GET
   rewrite: pass_through
+  request_headers:
+    add:
+      Authorization: "Bearer {{access_token}}"
+      X-Id-Token:    "{{id_token}}"
+    strip:
+      - Cookie
+  response_headers:
+    strip:
+      - X-Internal-Server
   enabled: true
 
 # \u2500\u2500 Health check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -72,10 +88,10 @@
   rewrite: strip_prefix
   request_headers:
     add:
-      Authorization:       "Bearer {{access_token}}"   # inject OAuth2 Bearer token
-      X-Id-Token:          "{{id_token}}"        # inject OIDC ID token
-      X-Api-Key:           "{{env:API_KEY}}"     # inject env variable
-      X-Forwarded-Prefix:  /api
+      Authorization: "Bearer {{access_token}}" # inject OAuth2 Bearer token
+      X-Id-Token: "{{id_token}}" # inject OIDC ID token
+      X-Api-Key: "{{env:API_KEY}}" # inject env variable
+      X-Forwarded-Prefix: /api
     strip:
       - Cookie
   response_headers:
