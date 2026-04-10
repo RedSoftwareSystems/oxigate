@@ -10,20 +10,42 @@
 #                 type: exact   value: /health
 #                 type: prefix  value: /api/
 #                 type: regex   value: "^/v[0-9]+/.*"
-# upstream_url  (required) Base URL of the upstream service (no trailing slash).
+# upstream_url  (optional) Base URL of the upstream (omit for redirect-only routes).
 # methods       (optional) Restrict to specific HTTP methods; empty = all.
+# scheme        (optional) http | https | any (default). Scheme-specific routes
+#               take priority over 'any' routes.
+# hostname      (optional) Restrict to a specific Host header value (with optional port).
+# match_headers (optional) List of {name, pattern} header matching rules (all must match).
 # rewrite       (optional) How to build the upstream path:
 #                 pass_through  — forward unchanged (default)
 #                 strip_prefix  — remove the matched prefix
 #                 !replace /new-path
+# redirect      (optional) Short-circuit with a redirect instead of proxying:
+#                 type: permanent   (301)
+#                 type: temporary   (302)
+#                 url: https://...  supports {{env:VAR}} interpolation
 # request_headers  (optional) Headers to add/strip before forwarding.
 # response_headers (optional) Headers to add/strip before returning.
 # client_name   (optional) Name of a client from clients.yaml; if omitted
 #               a plain default client is used.
 # enabled       (optional, default: true) Set false to disable without removing.
 
-# \u2500\u2500 Root \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Exact match on "/" — rewritten to /index.html on the CDN.
+# ── HTTP → HTTPS redirect ──────────────────────────────────────────────────────
+# Scheme-specific (scheme: http) so it takes priority over all generic routes.
+# Catches every plain HTTP request and permanently redirects to HTTPS.
+# GATEWAY_HOSTNAME must be set in .env (e.g. GATEWAY_HOSTNAME=localhost:8443 for local dev).
+- name: http-to-https
+  scheme: http
+  path:
+    type: prefix
+    value: /
+  redirect:
+    type: permanent
+    url: "https://{{env:GATEWAY_HOSTNAME}}"
+  enabled: true
+
+# ── Root ───────────────────────────────────────────────────────────────────────
+# Exact match on "/" — proxied to the CDN home page.
 - name: root
   path:
     type: exact
@@ -34,7 +56,7 @@
   request_headers:
     add:
       Authorization: "Bearer {{access_token}}"
-      X-Id-Token:    "{{id_token}}"
+      X-Id-Token: "{{id_token}}"
     strip:
       - Cookie
   response_headers:
@@ -42,7 +64,7 @@
       - X-Internal-Server
   enabled: true
 
-# \u2500\u2500 Protected pages \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Protected pages ────────────────────────────────────────────────────────────
 # Matches /protected/<page> and forwards to the CDN which appends .html.
 # The CDN receives the path as-is (e.g. /protected/dashboard) and resolves
 # the corresponding /protected/dashboard.html file.
@@ -58,7 +80,7 @@
   request_headers:
     add:
       Authorization: "Bearer {{access_token}}"
-      X-Id-Token:    "{{id_token}}"
+      X-Id-Token: "{{id_token}}"
     strip:
       - Cookie
   response_headers:
@@ -66,7 +88,7 @@
       - X-Internal-Server
   enabled: true
 
-# \u2500\u2500 Health check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Health check ───────────────────────────────────────────────────────────────
 - name: health-check
   path:
     type: exact
@@ -74,7 +96,7 @@
   upstream_url: "http://backend:8080"
   enabled: true
 
-# \u2500\u2500 API backend \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── API backend ────────────────────────────────────────────────────────────────
 - name: api-backend
   path:
     type: prefix
@@ -88,9 +110,9 @@
   rewrite: strip_prefix
   request_headers:
     add:
-      Authorization: "Bearer {{access_token}}" # inject OAuth2 Bearer token
-      X-Id-Token: "{{id_token}}" # inject OIDC ID token
-      X-Api-Key: "{{env:API_KEY}}" # inject env variable
+      Authorization: "Bearer {{access_token}}"
+      X-Id-Token: "{{id_token}}"
+      X-Api-Key: "{{env:API_KEY}}"
       X-Forwarded-Prefix: /api
     strip:
       - Cookie
@@ -100,7 +122,7 @@
   # client_name: secure-backend   # reference a named client from clients.yaml
   enabled: true
 
-# \u2500\u2500 Static assets \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Static assets ──────────────────────────────────────────────────────────────
 - name: static-assets
   path:
     type: prefix

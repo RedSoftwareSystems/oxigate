@@ -254,7 +254,7 @@ logs-cdn:
 # Internal helper — assert that a curl response body/status matches a pattern.
 define assert_contains
 	@printf "  %-48s" "$(1)"; \
-	RESP=$$(curl -sk --cacert "$(CA_CERT)" -o - -w '%{http_code}' "$(2)" 2>/dev/null); \
+	RESP=$$(curl -sk  --cacert "$(CA_CERT)" -o - -w '%{http_code}' "$(2)" 2>/dev/null); \
 	CODE=$${RESP: -3}; BODY=$${RESP%???}; \
 	if echo "$$BODY$$CODE" | grep -q "$(3)"; then \
 	  echo "$(GREEN)OK$(RESET)  [HTTP $$CODE]"; \
@@ -289,24 +289,26 @@ define assert_header_present
 	fi
 endef
 
+
+# Internal helper — assert that a URL returns a redirect to an expected location.
+define assert_redirect
+	@printf "  %-48s" "$(1)"; 	RESP=$$(curl -sk --cacert "$(CA_CERT)" -o /dev/null -w '%{http_code} %{redirect_url}' "$(2)" 2>/dev/null); 	CODE=$$(echo "$$RESP" | cut -d' ' -f1); 	LOC=$$(echo "$$RESP" | cut -d' ' -f2-); 	if [ "$$CODE" = "$(3)" ] && echo "$$LOC" | grep -q "$(4)"; then 	  echo "$(GREEN)OK$(RESET)  [HTTP $$CODE → $$LOC]"; 	else 	  echo "$(RED)FAIL$(RESET) [HTTP $$CODE → $$LOC]  expected: $(3) → $(4)"; 	  exit 1; 	fi
+endef
 ## test: Run all smoke tests against the running stack.
 test: test-http test-https test-headers
 	@echo ""
 	@echo "$(GREEN)$(BOLD)All smoke tests passed.$(RESET)"
 
-## test-http: Smoke test HTTP endpoints.
+## test-http: Verify that all HTTP traffic is permanently redirected to HTTPS.
 test-http:
 	@echo ""
-	@echo "$(BOLD)HTTP smoke tests  →  $(HTTP_BASE)$(RESET)"
-	$(call assert_contains,GET /health → 200 + status ok,$(HTTP_BASE)/health,ok)
-	$(call assert_contains,GET / → 200 + HTML home page,$(HTTP_BASE)/,<!DOCTYPE)
-	$(call assert_contains,GET /api/users → 200 + JSON array,$(HTTP_BASE)/api/users,alice)
-	$(call assert_contains,GET /api/items → 200 + JSON array,$(HTTP_BASE)/api/items,item-1)
-	$(call assert_contains,GET /static/logo.svg → 200 + SVG,$(HTTP_BASE)/static/logo.svg,svg)
-	$(call assert_contains,GET /static/styles.css → 200 + CSS,$(HTTP_BASE)/static/styles.css,body)
-	$(call assert_contains,GET /static/app.js → 200 + JS,$(HTTP_BASE)/static/app.js,Oxigate)
+	@echo "$(BOLD)HTTP redirect tests  →  $(HTTP_BASE)$(RESET)"
+	$(call assert_redirect,GET /       → 301 to HTTPS,$(HTTP_BASE)/,301,https://)
+	$(call assert_redirect,GET /health → 301 to HTTPS,$(HTTP_BASE)/health,301,https://)
+	$(call assert_redirect,GET /api/users → 301 to HTTPS,$(HTTP_BASE)/api/users,301,https://)
+	$(call assert_redirect,GET /static/ → 301 to HTTPS,$(HTTP_BASE)/static/logo.svg,301,https://)
 	@echo ""
-	@echo "$(GREEN)HTTP tests passed.$(RESET)"
+	@echo "$(GREEN)HTTP redirect tests passed.$(RESET)"
 
 ## test-https: Smoke test HTTPS endpoints (requires ./certs/ca.crt).
 test-https: $(CA_CERT)
@@ -323,10 +325,10 @@ test-https: $(CA_CERT)
 test-headers:
 	@echo ""
 	@echo "$(BOLD)Header tests$(RESET)"
-	$(call assert_header_absent,X-Internal-Server stripped on /api/users,$(HTTP_BASE)/api/users,X-Internal-Server)
-	$(call assert_header_absent,X-Internal-Server stripped on /static/logo.svg,$(HTTP_BASE)/static/logo.svg,X-Internal-Server)
-	$(call assert_header_present,Content-Type present on /api/users,$(HTTP_BASE)/api/users,content-type)
-	$(call assert_header_present,Content-Type present on /health,$(HTTP_BASE)/health,content-type)
+	$(call assert_header_absent,X-Internal-Server stripped on /api/users,$(HTTPS_BASE)/api/users,X-Internal-Server)
+	$(call assert_header_absent,X-Internal-Server stripped on /static/logo.svg,$(HTTPS_BASE)/static/logo.svg,X-Internal-Server)
+	$(call assert_header_present,Content-Type present on /api/users,$(HTTPS_BASE)/api/users,content-type)
+	$(call assert_header_present,Content-Type present on /health,$(HTTPS_BASE)/health,content-type)
 	@echo ""
 	@echo "$(GREEN)Header tests passed.$(RESET)"
 
@@ -392,6 +394,7 @@ help:
 	@echo "  $(CYAN)OAUTH_CLIENT_SECRET$(RESET)   OAuth2 client secret"
 	@echo "  $(CYAN)COOKIE_ENCRYPTION_KEY$(RESET) Session cookie key (min 32 chars)"
 	@echo "  $(CYAN)API_KEY$(RESET)               API key forwarded to the backend"
+	@echo "  $(CYAN)GATEWAY_HOSTNAME$(RESET)              Hostname:port used in the HTTP → HTTPS redirect (e.g. localhost:8443)"
 	@echo ""
 	@echo "  Run '$(BOLD)make env$(RESET)' to create .env from .env.example."
 	@echo ""

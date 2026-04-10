@@ -436,6 +436,7 @@ async fn run(gateway_cfg: GatewayConfig) -> Result<(), StartupError> {
         gateway_cfg.config_files.routes.display()
     );
     let routes = load_yaml::<Vec<ReverseProxyRoute>>(&gateway_cfg.config_files.routes)?;
+    let routes: Vec<ReverseProxyRoute> = routes.iter().map(|r| r.interpolated()).collect();
 
     info!(
         "Loading client registry from {}",

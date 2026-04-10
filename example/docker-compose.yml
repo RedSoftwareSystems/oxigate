@@ -49,6 +49,7 @@ services:
       OAUTH_CLIENT_SECRET:   ${OAUTH_CLIENT_SECRET}
       COOKIE_ENCRYPTION_KEY: ${COOKIE_ENCRYPTION_KEY}
       API_KEY:               ${API_KEY}
+      GATEWAY_HOSTNAME:      ${GATEWAY_HOSTNAME}
       RUST_LOG:              info
     volumes:
       - ./gateway:/etc/oxigate:ro

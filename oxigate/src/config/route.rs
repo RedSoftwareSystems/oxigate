@@ -30,6 +30,115 @@ pub enum PathMatcher {
     Regex(String),
 }
 
+/// The transport scheme a route is restricted to.
+///
+/// Scheme-specific routes (`Http` or `Https`) take priority over generic
+/// (`Any`) routes when the incoming request's scheme matches. `Any` routes
+/// act as a fallback when no scheme-specific route matches.
+///
+/// # YAML
+///
+/// ```yaml
+/// scheme: http    # only match plain HTTP requests
+/// scheme: https   # only match HTTPS requests
+/// scheme: any     # match both (default)
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scheme {
+    Http,
+    Https,
+    #[default]
+    Any,
+}
+
+impl Scheme {
+    /// Returns `true` when the variant is `Any` (used by `skip_serializing_if`).
+    pub fn is_any(&self) -> bool {
+        matches!(self, Scheme::Any)
+    }
+}
+
+/// The kind and target URL of a redirect response.
+///
+/// Supports `{{env:VAR}}` interpolation in the target URL — resolved at
+/// startup by [`ReverseProxyRoute::interpolated`].
+///
+/// # YAML examples
+///
+/// ```yaml
+/// # Temporary redirect (302 Found)
+/// redirect:
+///   type: temporary
+///   url: https://new.example.com/path
+///
+/// # Permanent redirect (301 Moved Permanently)
+/// redirect:
+///   type: permanent
+///   url: https://new.example.com/path
+///
+/// # With env-var interpolation
+/// redirect:
+///   type: permanent
+///   url: "{{env:CANONICAL_URL}}/path"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum RedirectAction {
+    /// HTTP 302 Found — the resource has temporarily moved.
+    Temporary {
+        /// The URL to redirect to. Supports `{{env:VAR}}` interpolation.
+        url: String,
+    },
+    /// HTTP 301 Moved Permanently — the resource has permanently moved.
+    Permanent {
+        /// The URL to redirect to. Supports `{{env:VAR}}` interpolation.
+        url: String,
+    },
+}
+
+impl RedirectAction {
+    /// Returns the HTTP status code for this redirect type.
+    pub fn status_code(&self) -> u16 {
+        match self {
+            RedirectAction::Temporary { .. } => 302,
+            RedirectAction::Permanent { .. } => 301,
+        }
+    }
+
+    /// Returns the target URL.
+    pub fn url(&self) -> &str {
+        match self {
+            RedirectAction::Temporary { url } | RedirectAction::Permanent { url } => url,
+        }
+    }
+}
+
+/// A single header matching rule used to restrict route selection.
+///
+/// The `pattern` is a full regular-expression matched against the header
+/// value (case-sensitive by default). The match must cover the **entire**
+/// value (anchored). If the header is absent the rule does **not** match.
+///
+/// # YAML examples
+///
+/// ```yaml
+/// match_headers:
+///   - name: Content-Type
+///     pattern: "application/json(;.*)?"
+///   - name: Accept
+///     pattern: "text/html.*"
+///   - name: X-Custom-Flag
+///     pattern: "enabled"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeaderMatcher {
+    /// Name of the request header to inspect (case-insensitive lookup).
+    pub name: String,
+    /// Regular expression that must fully match the header value.
+    pub pattern: String,
+}
+
 /// Controls how the upstream URL is constructed from the matched request path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -307,7 +416,8 @@ pub struct ReverseProxyRoute {
 
     /// Base URL of the upstream service requests are forwarded to
     /// (e.g. `http://backend:8080`). Must **not** contain a trailing slash.
-    pub upstream_url: String,
+    /// Required for proxy routes; omitted for redirect-only routes.
+    pub upstream_url: Option<String>,
 
     /// Restrict matching to specific HTTP methods.
     /// When empty all methods are accepted.
@@ -336,6 +446,80 @@ pub struct ReverseProxyRoute {
     /// client with no explicit timeout is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
+
+    /// Optional list of header matching rules.
+    ///
+    /// All rules must match for the route to be selected (AND semantics).
+    /// If the list is empty the route matches any headers.
+    ///
+    /// Each rule specifies a header name and a regex pattern. The pattern must
+    /// fully match the header value. If the named header is absent the rule
+    /// does not match.
+    ///
+    /// # YAML example
+    ///
+    /// ```yaml
+    /// match_headers:
+    ///   - name: Content-Type
+    ///     pattern: "application/json(;.*)?"
+    ///   - name: X-Api-Version
+    ///     pattern: "v[2-9]"
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub match_headers: Vec<HeaderMatcher>,
+
+    /// Restrict this route to a specific transport scheme.
+    ///
+    /// Scheme-specific routes (`http` or `https`) are evaluated before `any`
+    /// routes, giving them priority. Defaults to `any` when omitted.
+    #[serde(default, skip_serializing_if = "Scheme::is_any")]
+    pub scheme: Scheme,
+
+    /// Optional hostname (and optional port) this route is restricted to.
+    ///
+    /// Matched against the `Host` header of the incoming request.
+    /// Supports `{{env:VAR}}` interpolation resolved at startup.
+    ///
+    /// **Matching rules:**
+    /// - When `None` (omitted), the route matches any `Host` header — no restriction.
+    /// - When set **without a port** (e.g. `api.example.com`), only the hostname is
+    ///   compared; any port in the `Host` header is ignored.
+    /// - When set **with a port** (e.g. `api.example.com:8443`), both the hostname
+    ///   and the port must match the `Host` header exactly.
+    ///
+    /// Hostname comparison is case-insensitive in all cases.
+    ///
+    /// # YAML examples
+    ///
+    /// ```yaml
+    /// hostname: api.example.com            # matches any port on this host
+    /// hostname: api.example.com:8443       # matches only port 8443
+    /// hostname: "{{env:GATEWAY_HOSTNAME}}" # from environment variable
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+
+    /// Optional redirect action.
+    ///
+    /// When set, the gateway immediately returns an HTTP redirect response
+    /// (`301` or `302`) to the client without contacting any upstream.
+    /// The `upstream_url` field is not required for redirect routes.
+    ///
+    /// # YAML examples
+    ///
+    /// ```yaml
+    /// # Redirect HTTP traffic to HTTPS (combine with scheme: http)
+    /// redirect:
+    ///   type: permanent
+    ///   url: "https://{{env:DOMAIN}}{{path}}"
+    ///
+    /// # Temporary redirect to a maintenance page
+    /// redirect:
+    ///   type: temporary
+    ///   url: https://example.com/maintenance
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect: Option<RedirectAction>,
 
     /// Whether this route is active. Disabled routes are loaded but never matched.
     #[serde(default = "default_enabled")]
@@ -394,7 +578,7 @@ impl ReverseProxyRoute {
                 PathMatcher::Prefix(s) => PathMatcher::Prefix(interpolate(s)),
                 PathMatcher::Regex(s) => PathMatcher::Regex(interpolate(s)),
             },
-            upstream_url: interpolate(&self.upstream_url),
+            upstream_url: self.upstream_url.as_deref().map(interpolate),
             methods: self.methods.clone(),
             rewrite: match &self.rewrite {
                 RewriteRule::Replace(s) => RewriteRule::Replace(interpolate(s)),
@@ -403,6 +587,24 @@ impl ReverseProxyRoute {
             request_headers: interp_headers_config(&self.request_headers),
             response_headers: interp_headers_config(&self.response_headers),
             client_name: self.client_name.as_deref().map(interpolate),
+            scheme: self.scheme.clone(),
+            hostname: self.hostname.as_deref().map(interpolate),
+            redirect: self.redirect.as_ref().map(|r| match r {
+                RedirectAction::Temporary { url } => RedirectAction::Temporary {
+                    url: interpolate(url),
+                },
+                RedirectAction::Permanent { url } => RedirectAction::Permanent {
+                    url: interpolate(url),
+                },
+            }),
+            match_headers: self
+                .match_headers
+                .iter()
+                .map(|m| HeaderMatcher {
+                    name: interpolate(&m.name),
+                    pattern: interpolate(&m.pattern),
+                })
+                .collect(),
             enabled: self.enabled,
         }
     }
@@ -420,10 +622,13 @@ mod tests {
         ReverseProxyRoute {
             name: "api-backend".to_string(),
             path: PathMatcher::Prefix("/api/".to_string()),
-            upstream_url: "http://backend:8080".to_string(),
+            upstream_url: Some("http://backend:8080".to_string()),
             methods: vec![HttpMethod::Get, HttpMethod::Post],
             rewrite: RewriteRule::StripPrefix,
             client_name: None,
+            match_headers: vec![],
+            scheme: Scheme::Any,
+            hostname: None,
             request_headers: HeadersConfig {
                 add: [
                     (
@@ -451,6 +656,7 @@ mod tests {
                 add: HashMap::new(),
                 strip: vec!["X-Internal-Server".to_string()],
             },
+            redirect: None,
             enabled: true,
         }
     }
@@ -561,6 +767,78 @@ response_headers:
     }
 
     #[test]
+    fn hostname_field_roundtrip_yaml() {
+        let yaml = r#"
+name: vhost-route
+path:
+  type: exact
+  value: /
+upstream_url: "http://svc:8080"
+hostname: api.example.com
+"#;
+        let route: ReverseProxyRoute = serde_yaml::from_str(yaml).expect("deserialize");
+        assert_eq!(route.hostname.as_deref(), Some("api.example.com"));
+
+        let back = serde_yaml::to_string(&route).expect("serialize");
+        let decoded: ReverseProxyRoute = serde_yaml::from_str(&back).expect("re-deserialize");
+        assert_eq!(route, decoded);
+    }
+
+    #[test]
+    fn hostname_absent_defaults_to_none() {
+        let yaml = r#"
+name: no-host
+path:
+  type: exact
+  value: /health
+upstream_url: "http://svc:8080"
+"#;
+        let route: ReverseProxyRoute = serde_yaml::from_str(yaml).expect("deserialize");
+        assert!(route.hostname.is_none());
+    }
+
+    #[test]
+    fn redirect_action_roundtrip_yaml() {
+        let yaml = r#"
+name: http-to-https
+scheme: http
+path:
+  type: prefix
+  value: /
+upstream_url: "http://unused:9999"
+redirect:
+  type: permanent
+  url: "https://example.com"
+"#;
+        let route: ReverseProxyRoute = serde_yaml::from_str(yaml).expect("deserialize");
+        let action = route.redirect.as_ref().expect("redirect present");
+        assert_eq!(action.status_code(), 301);
+        assert_eq!(action.url(), "https://example.com");
+
+        let back = serde_yaml::to_string(&route).expect("serialize");
+        let decoded: ReverseProxyRoute = serde_yaml::from_str(&back).expect("re-deserialize");
+        assert_eq!(route, decoded);
+    }
+
+    #[test]
+    fn redirect_temporary_roundtrip_yaml() {
+        let yaml = r#"
+name: temp-redirect
+path:
+  type: exact
+  value: /old
+redirect:
+  type: temporary
+  url: "https://example.com/new"
+"#;
+        let route: ReverseProxyRoute = serde_yaml::from_str(yaml).expect("deserialize");
+        let action = route.redirect.expect("redirect present");
+        assert_eq!(action.status_code(), 302);
+        assert_eq!(action.url(), "https://example.com/new");
+        assert!(route.upstream_url.is_none());
+    }
+
+    #[test]
     fn default_enabled_is_true() {
         let yaml = r#"
 name: minimal
@@ -573,5 +851,43 @@ upstream_url: "http://svc:9000"
         assert!(route.enabled);
         assert_eq!(route.rewrite, RewriteRule::PassThrough);
         assert!(route.methods.is_empty());
+    }
+
+    #[test]
+    fn match_headers_roundtrip_yaml() {
+        let yaml = r#"
+name: json-api
+path:
+  type: prefix
+  value: /api/
+upstream_url: "http://backend:8080"
+match_headers:
+  - name: Content-Type
+    pattern: "application/json(;.*)?"
+  - name: X-Api-Version
+    pattern: "v[2-9]"
+"#;
+        let route: ReverseProxyRoute = serde_yaml::from_str(yaml).expect("deserialize");
+        assert_eq!(route.match_headers.len(), 2);
+        assert_eq!(route.match_headers[0].name, "Content-Type");
+        assert_eq!(route.match_headers[0].pattern, "application/json(;.*)?");
+        assert_eq!(route.match_headers[1].name, "X-Api-Version");
+
+        let back = serde_yaml::to_string(&route).expect("serialize");
+        let decoded: ReverseProxyRoute = serde_yaml::from_str(&back).expect("re-deserialize");
+        assert_eq!(route, decoded);
+    }
+
+    #[test]
+    fn match_headers_absent_defaults_to_empty() {
+        let yaml = r#"
+name: no-header-match
+path:
+  type: exact
+  value: /health
+upstream_url: "http://svc:8080"
+"#;
+        let route: ReverseProxyRoute = serde_yaml::from_str(yaml).expect("deserialize");
+        assert!(route.match_headers.is_empty());
     }
 }
